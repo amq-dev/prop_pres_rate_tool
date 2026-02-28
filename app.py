@@ -37,7 +37,9 @@ st.markdown("""
     .tier-2 { background-color: #fef08a; color: #854d0e; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.85em; }
     .disclaimer { font-size: 0.9em; color: #6b7280; font-style: italic; margin-top: 20px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 15px; margin-bottom: 15px; background-color: #f9fafb; box-shadow: 0 1px 2px rgba(0,0,0,0.05); color: #1f2937; }
-    .waterfall-row { display: flex; align-items: center; margin-bottom: 8px; color: inherit; }    .waterfall-bar { height: 32px; border-radius: 4px; display: flex; align-items: center; padding: 0 10px; color: white; font-weight: bold; font-size: 0.9em; }
+    .waterfall-row { display: flex; align-items: center; margin-bottom: 8px; color: inherit; }
+    .waterfall-bar { height: 32px; border-radius: 4px; display: flex; align-items: center; padding: 0 10px; color: white; font-weight: bold; font-size: 0.9em; }
+    .ghost-list { font-size: 0.8em; color: #9ca3af; font-style: italic; margin-top: -10px; margin-bottom: 10px; padding-left: 5px; }
     .waterfall-label { width: 160px; font-size: 0.9em; color: inherit; font-weight: 500; }
     .waterfall-amount { width: 120px; text-align: right; font-weight: bold; font-size: 0.95em; margin-left: 10px; color: #9ca3af; }
     .waterfall-note { font-size: 0.85em; color: #64748b; font-style: italic; margin-top: 15px; line-height: 1.4; border-top: 1px dashed #e5e7eb; padding-top: 10px; }
@@ -59,13 +61,17 @@ def load_data():
         if pd.isna(size_str) or str(size_str).strip() == "": return ""
         s = str(size_str).lower().replace('sf', '').strip()
         
-        if any(x in s for x in ['1-10000', '1-5000', '5001-10000', '1-1000', '1001-5000', '5001-8000', '8001-10000', '1-10890', '10891-12000']):
+        # Standard: anything up to 10k
+        if any(x in s for x in ['1-10000', '1-5000', '5001-10000', '1-1000', '1001-5000', '5001-8000', '8001-10000']):
             return "Standard Lot (<10,000 sf)"
-        elif any(x in s for x in ['10001-20000', '10001-15000', '15001-20000', '12001-15000', '15001-18000', '18001-20000', '10001-10890']):
-            return "Medium Lot (10k-20k sf)"
-        elif any(x in s for x in ['20001', '30001', '15001-25000', '25001', '35001', '40001', '10001+', '1-15000']):
-            return "Oversized Lot (20k+ sf)"
-        return "Standard Lot (<10,000 sf)" # Catch-all
+        # Medium: 10k to 25k (includes 1-15000 flat rates and 15001-25000 ranges)
+        elif any(x in s for x in ['10001-20000', '10001-15000', '15001-20000', '12001-15000', '15001-18000', '18001-20000', '10001-10890', '1-10890', '10891-12000', '1-15000', '15001-25000', '10001+']):
+            return "Medium Lot (10k-25k sf)"
+        # Oversized: 25k+
+        elif any(x in s for x in ['25001', '30001', '35001', '40001', '20001-30000', '20001-25000', '25001-35000', '35001-43560', '20001-21780', '21781-25000']):
+            return "Oversized Lot (25k+ sf)"
+        # Flag anything that doesn't match instead of silently defaulting
+        return f"Unrecognized ({size_str.strip()})"
         
     df['lot_size'] = df['lot_size'].apply(categorize_lot)
     
@@ -164,6 +170,13 @@ with tab1:
     
     with col_work:
         selected_works = st.multiselect("Work Type", valid_works, placeholder="Start typing to search...")
+        # Ghost list: show what's unavailable based on current filters
+        all_works = sorted(df['display_work'].unique())
+        ghost_works = set(all_works) - set(valid_works)
+        if ghost_works and (selected_categories or selected_investors):
+            ghost_str = ', '.join(sorted(ghost_works)[:4])
+            if len(ghost_works) > 4: ghost_str += f" ... +{len(ghost_works)-4} more"
+            st.markdown(f"<div class='ghost-list'>Unavailable for this selection: {ghost_str}</div>", unsafe_allow_html=True)
     
     # Narrow states based on all selections so far
     state_filtered = cat_filtered
@@ -173,6 +186,13 @@ with tab1:
     
     with col_state:
         selected_states = st.multiselect("State", valid_states, placeholder="All States included by default")
+        # Ghost list for states
+        all_states = sorted(df['state'].unique())
+        ghost_states = set(all_states) - set(valid_states)
+        if ghost_states and (selected_categories or selected_investors or selected_works):
+            ghost_str = ', '.join(sorted(ghost_states)[:4])
+            if len(ghost_states) > 4: ghost_str += f" ... +{len(ghost_states)-4} more"
+            st.markdown(f"<div class='ghost-list'>Unavailable for this selection: {ghost_str}</div>", unsafe_allow_html=True)
 
     # Final filter
     result = df.copy()
@@ -245,7 +265,7 @@ with tab1:
                 'state': 'State', 
                 'price': 'Rate', 
                 'unit': 'Unit', 
-                'notes': 'Notes'
+                'notes': 'Notes (Double-click to expand)'
             }, inplace=True)
             
             st.dataframe(
@@ -253,7 +273,7 @@ with tab1:
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    "Notes": st.column_config.TextColumn(width="large")
+                    "Notes (Double-click to expand)": st.column_config.TextColumn(width="large")
                 }
             )
     else:
@@ -279,76 +299,79 @@ with tab2:
     if comp_work:
         work_df = comp_df_base[comp_df_base['display_work'] == comp_work]
         
-        # State picker — only show states with 2+ nationals for meaningful comparison
+        # State picker - only show states with 2+ nationals for meaningful comparison
         state_nat_counts = work_df.groupby('state')['national'].nunique()
         multi_states = state_nat_counts[state_nat_counts >= 2].index.tolist()
         
-        comp_state = st.selectbox(
-            "Select State", 
-            sorted(multi_states) if multi_states else sorted(work_df['state'].unique()),
-            key="comp_state"
-        )
-        
-        if comp_state:
-            comp_result = work_df[(work_df['state'] == comp_state) | (work_df['state'] == 'All States')]
+        if not multi_states:
+            st.warning("Only one company reports data for this work type. Not enough data to compare across nationals yet.")
+        else:
+            comp_state = st.selectbox(
+                "Select State", 
+                sorted(multi_states),
+                key="comp_state"
+            )
             
-            # Sort: Tier 1 first, then by price descending (highest payer on top)
-            comp_result = comp_result.copy()
-            comp_result['sort_key'] = comp_result['tier'].apply(lambda t: 0 if t == 1 else 1)
-            comp_result = comp_result.sort_values(['sort_key', 'price'], ascending=[True, False])
-            
-            if not comp_result.empty:
-                st.markdown(f"**{comp_work}** in **{comp_state}** — {len(comp_result)} companies reporting")
+            if comp_state:
+                comp_result = work_df[(work_df['state'] == comp_state) | (work_df['state'] == 'All States')]
                 
-                # Visual bar comparison
-                max_price = comp_result['price'].max()
+                # Sort: Tier 1 first, then by price descending (highest payer on top)
+                comp_result = comp_result.copy()
+                comp_result['sort_key'] = comp_result['tier'].apply(lambda t: 0 if t == 1 else 1)
+                comp_result = comp_result.sort_values(['sort_key', 'price'], ascending=[True, False])
                 
-                for _, row in comp_result.iterrows():
-                    bar_pct = (row['price'] / max_price * 100) if max_price > 0 else 0
-                    bar_color = "#059669" if row['tier'] == 1 else "#d97706"
-                    tier_tag = "✅" if row['tier'] == 1 else "⚠️"
-                    zone_note = f" ({row['region_override']})" if str(row.get('region_override', '')).strip() else ""
-                    date_note = str(row['last_updated'])
+                if not comp_result.empty:
+                    st.markdown(f"**{comp_work}** in **{comp_state}** — {len(comp_result)} companies reporting")
                     
-                    st.markdown(f"""
-                    <div class='waterfall-row'>
-                        <div class='waterfall-label'>{tier_tag} {row['national']}{zone_note}</div>
-                        <div style='flex: 1;'>
-                            <div class='waterfall-bar' style='width: {max(bar_pct, 8)}%; background-color: {bar_color};'>${row['price']:,.2f}</div>
-                        </div>
-                        <div class='waterfall-amount'>{date_note}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                # Gap analysis
-                if len(comp_result) >= 2:
-                    highest = comp_result.iloc[0]
-                    lowest = comp_result.iloc[-1]
-                    gap = highest['price'] - lowest['price']
-                    gap_pct = (gap / highest['price'] * 100) if highest['price'] > 0 else 0
+                    # Visual bar comparison
+                    max_price = comp_result['price'].max()
                     
-                    if gap_pct > 30:
+                    for _, row in comp_result.iterrows():
+                        bar_pct = (row['price'] / max_price * 100) if max_price > 0 else 0
+                        bar_color = "#059669" if row['tier'] == 1 else "#d97706"
+                        tier_tag = "✅" if row['tier'] == 1 else "⚠️"
+                        zone_note = f" ({row['region_override']})" if str(row.get('region_override', '')).strip() else ""
+                        date_note = str(row['last_updated'])
+                        
                         st.markdown(f"""
-                        <div class='gap-alert'>
-                            💡 <b>Spread: ${gap:,.2f} ({gap_pct:.0f}%)</b> between {highest['national']} (${highest['price']:,.2f}) and {lowest['national']} (${lowest['price']:,.2f}). 
-                            If you're getting the low end, you may be multiple layers from the investor.
+                        <div class='waterfall-row'>
+                            <div class='waterfall-label'>{tier_tag} {row['national']}{zone_note}</div>
+                            <div style='flex: 1;'>
+                                <div class='waterfall-bar' style='width: {max(bar_pct, 8)}%; background-color: {bar_color};'>${row['price']:,.2f}</div>
+                            </div>
+                            <div class='waterfall-amount'>{date_note}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div class='gap-good'>
-                            📊 <b>Spread: ${gap:,.2f} ({gap_pct:.0f}%)</b> — relatively tight range across reporting companies.
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-                # Table below the bars
-                with st.expander("View full data table"):
-                    tbl = comp_result[['national', 'state', 'price', 'unit', 'tier', 'last_updated', 'notes', 'region_override']].copy()
-                    tbl['price'] = tbl['price'].apply(lambda x: f"${x:,.2f}")
-                    tbl.rename(columns={'national':'Company','state':'State','price':'Rate','unit':'Unit','tier':'Tier','last_updated':'Date','notes':'Notes','region_override':'Zone'}, inplace=True)
-                    st.dataframe(tbl, use_container_width=True, hide_index=True)
-            else:
-                st.info("No data for this combination.")
+                    
+                    # Gap analysis
+                    if len(comp_result) >= 2:
+                        highest = comp_result.iloc[0]
+                        lowest = comp_result.iloc[-1]
+                        gap = highest['price'] - lowest['price']
+                        gap_pct = (gap / highest['price'] * 100) if highest['price'] > 0 else 0
+                        
+                        if gap_pct > 30:
+                            st.markdown(f"""
+                            <div class='gap-alert'>
+                                💡 <b>Spread: ${gap:,.2f} ({gap_pct:.0f}%)</b> between {highest['national']} (${highest['price']:,.2f}) and {lowest['national']} (${lowest['price']:,.2f}). 
+                                If you're getting the low end, you may be multiple layers from the investor.
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"""
+                            <div class='gap-good'>
+                                📊 <b>Spread: ${gap:,.2f} ({gap_pct:.0f}%)</b> — relatively tight range across reporting companies.
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
+                    # Table below the bars
+                    with st.expander("View full data table"):
+                        tbl = comp_result[['national', 'state', 'price', 'unit', 'tier', 'last_updated', 'notes', 'region_override']].copy()
+                        tbl['price'] = tbl['price'].apply(lambda x: f"${x:,.2f}")
+                        tbl.rename(columns={'national':'Company','state':'State','price':'Rate','unit':'Unit','tier':'Tier','last_updated':'Date','notes':'Notes (Double-click to expand)','region_override':'Zone'}, inplace=True)
+                        st.dataframe(tbl, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No data for this combination.")
     else:
         st.info("Select a work type above to see how different companies compare.")
 
